@@ -1,12 +1,8 @@
 package defaultaddons
 
 import (
-	"fmt"
-	"strings"
-
 	"github.com/kris-nova/logger"
 	"github.com/pkg/errors"
-	api "github.com/weaveworks/eksctl/pkg/apis/eksctl.io/v1alpha5"
 	appsv1 "k8s.io/api/apps/v1"
 	apierrs "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -45,15 +41,9 @@ func UpdateAWSNode(rawClient kubernetes.RawClientInterface, region string, plan 
 			return false, err
 		}
 		if resource.GVK.Kind == "DaemonSet" {
-			image := &resource.Info.Object.(*appsv1.DaemonSet).Spec.Template.Spec.Containers[0].Image
-			imageParts := strings.Split(*image, ":")
-
-			if len(imageParts) != 2 {
-				return false, fmt.Errorf("unexpected image format %q for %q", *image, AWSNode)
-			}
-			awsNodeImagePrefix := fmt.Sprintf(awsNodeImagePrefixPTN, api.EKSResourceAccountID(region))
-			if strings.HasSuffix(imageParts[0], awsNodeImageSuffix) {
-				*image = awsNodeImagePrefix + region + awsNodeImageSuffix + ":" + imageParts[1]
+			if err := useRegionalImage(&resource.Info.Object.(*appsv1.DaemonSet).Spec.Template,
+				awsNodeImagePrefixPTN, region, awsNodeImageSuffix); err != nil {
+				return false, errors.Wrapf(err, "update image for %q", AWSNode)
 			}
 		}
 

@@ -58,16 +58,9 @@ func UpdateCoreDNS(rawClient kubernetes.RawClientInterface, region, controlPlane
 		}
 		switch resource.GVK.Kind {
 		case "Deployment":
-			image := &resource.Info.Object.(*appsv1.Deployment).Spec.Template.Spec.Containers[0].Image
-			imageParts := strings.Split(*image, ":")
-
-			if len(imageParts) != 2 {
-				return false, fmt.Errorf("unexpected image format %q for %q", *image, KubeProxy)
-			}
-
-			coreDNSImagePrefix := fmt.Sprintf(coreDNSImagePrefixPTN, api.EKSResourceAccountID(region))
-			if strings.HasSuffix(imageParts[0], coreDNSImageSuffix) {
-				*image = coreDNSImagePrefix + region + coreDNSImageSuffix + ":" + imageParts[1]
+			if err := useRegionalImage(&resource.Info.Object.(*appsv1.Deployment).Spec.Template,
+				coreDNSImagePrefixPTN, region, coreDNSImageSuffix); err != nil {
+				return false, errors.Wrapf(err, "update image for %q", KubeProxy)
 			}
 		case "Service":
 			resource.Info.Object.(*corev1.Service).SetResourceVersion(kubeDNSSevice.GetResourceVersion())
