@@ -25,7 +25,8 @@ const (
 	coreDNSImageSuffix    = ".amazonaws.com/eks/coredns"
 )
 
-// UpdateCoreDNS will update the `coredns` add-on
+// UpdateCoreDNS will update the `coredns` add-on and returns true
+// if an update is available
 func UpdateCoreDNS(rawClient kubernetes.RawClientInterface, region, controlPlaneVersion string, plan bool) (bool, error) {
 	kubeDNSSevice, err := rawClient.ClientSet().CoreV1().Services(metav1.NamespaceSystem).Get(KubeDNS, metav1.GetOptions{})
 	if err != nil {
@@ -36,7 +37,7 @@ func UpdateCoreDNS(rawClient kubernetes.RawClientInterface, region, controlPlane
 		return false, errors.Wrapf(err, "getting %q service", KubeDNS)
 	}
 
-	_, err = rawClient.ClientSet().AppsV1().Deployments(metav1.NamespaceSystem).Get(CoreDNS, metav1.GetOptions{})
+	kubeDNSDeployment, err := rawClient.ClientSet().AppsV1().Deployments(metav1.NamespaceSystem).Get(CoreDNS, metav1.GetOptions{})
 	if err != nil {
 		if apierrs.IsNotFound(err) {
 			logger.Warning("%q was not found", CoreDNS)
@@ -51,6 +52,7 @@ func UpdateCoreDNS(rawClient kubernetes.RawClientInterface, region, controlPlane
 		return false, err
 	}
 
+	tagMismatch := true
 	for _, rawObj := range list.Items {
 		resource, err := rawClient.NewRawResource(rawObj.Object)
 		if err != nil {
@@ -58,9 +60,16 @@ func UpdateCoreDNS(rawClient kubernetes.RawClientInterface, region, controlPlane
 		}
 		switch resource.GVK.Kind {
 		case "Deployment":
-			if err := useRegionalImage(&resource.Info.Object.(*appsv1.Deployment).Spec.Template,
-				coreDNSImagePrefixPTN, region, coreDNSImageSuffix); err != nil {
-				return false, errors.Wrapf(err, "update image for %q", KubeProxy)
+			podTemplate := resource.Info.Object.(*appsv1.Deployment).Spec.Template
+			if err := useRegionalImage(&podTemplate, coreDNSImagePrefixPTN, region, coreDNSImageSuffix); err != nil {
+				return false, errors.Wrapf(err, "update image for %q", CoreDNS)
+			}
+			tagMismatch, err = imageTagsDiffer(
+				podTemplate.Spec.Containers[0].Image,
+				kubeDNSDeployment.Spec.Template.Spec.Containers[0].Image,
+			)
+			if err != nil {
+				return false, err
 			}
 		case "Service":
 			resource.Info.Object.(*corev1.Service).SetResourceVersion(kubeDNSSevice.GetResourceVersion())
@@ -75,8 +84,12 @@ func UpdateCoreDNS(rawClient kubernetes.RawClientInterface, region, controlPlane
 	}
 
 	if plan {
-		logger.Critical("(plan) %q is not up-to-date", CoreDNS)
-		return true, nil
+		if tagMismatch {
+			logger.Critical("(plan) %q is not up-to-date", CoreDNS)
+			return true, nil
+		}
+		logger.Info("(plan) %q is already up-to-date", CoreDNS)
+		return false, nil
 	}
 
 	logger.Info("%q is now up-to-date", CoreDNS)

@@ -18,9 +18,10 @@ const (
 	awsNodeImageSuffix    = ".amazonaws.com/amazon-k8s-cni"
 )
 
-// UpdateAWSNode will update the `aws-node` add-on
+// UpdateAWSNode will update the `aws-node` add-on and returns true
+// if an update is available.
 func UpdateAWSNode(rawClient kubernetes.RawClientInterface, region string, plan bool) (bool, error) {
-	_, err := rawClient.ClientSet().AppsV1().DaemonSets(metav1.NamespaceSystem).Get(AWSNode, metav1.GetOptions{})
+	daemonSet, err := rawClient.ClientSet().AppsV1().DaemonSets(metav1.NamespaceSystem).Get(AWSNode, metav1.GetOptions{})
 	if err != nil {
 		if apierrs.IsNotFound(err) {
 			logger.Warning("%q was not found", AWSNode)
@@ -35,15 +36,23 @@ func UpdateAWSNode(rawClient kubernetes.RawClientInterface, region string, plan 
 		return false, err
 	}
 
+	tagMismatch := true
 	for _, rawObj := range list.Items {
 		resource, err := rawClient.NewRawResource(rawObj.Object)
 		if err != nil {
 			return false, err
 		}
 		if resource.GVK.Kind == "DaemonSet" {
-			if err := useRegionalImage(&resource.Info.Object.(*appsv1.DaemonSet).Spec.Template,
-				awsNodeImagePrefixPTN, region, awsNodeImageSuffix); err != nil {
+			podTemplate := resource.Info.Object.(*appsv1.DaemonSet).Spec.Template
+			if err := useRegionalImage(&podTemplate, awsNodeImagePrefixPTN, region, awsNodeImageSuffix); err != nil {
 				return false, errors.Wrapf(err, "update image for %q", AWSNode)
+			}
+			tagMismatch, err = imageTagsDiffer(
+				podTemplate.Spec.Containers[0].Image,
+				daemonSet.Spec.Template.Spec.Containers[0].Image,
+			)
+			if err != nil {
+				return false, err
 			}
 		}
 
@@ -62,8 +71,12 @@ func UpdateAWSNode(rawClient kubernetes.RawClientInterface, region string, plan 
 	}
 
 	if plan {
-		logger.Critical("(plan) %q is not up-to-date", AWSNode)
-		return true, nil
+		if tagMismatch {
+			logger.Critical("(plan) %q is not up-to-date", AWSNode)
+			return true, nil
+		}
+		logger.Info("(plan) %q is already up-to-date", AWSNode)
+		return false, nil
 	}
 
 	logger.Info("%q is now up-to-date", AWSNode)

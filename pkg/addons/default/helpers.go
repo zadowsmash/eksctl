@@ -39,3 +39,27 @@ func useRegionalImage(spec *corev1.PodTemplateSpec, prefixFormat, region, suffix
 	}
 	return nil
 }
+
+// imageTag extracts the container image's tag.
+func imageTag(image string) (string, error) {
+	parts := strings.Split(image, ":")
+	if len(parts) != 2 {
+		return "", fmt.Errorf("unexpected image format %q", image)
+	}
+
+	return parts[1], nil
+}
+
+// imageTagsDiffer returns true if the image tags are not the same
+// while ignoring the image name.
+func imageTagsDiffer(image1, image2 string) (bool, error) {
+	tag1, err := imageTag(image1)
+	if err != nil {
+		return false, err
+	}
+	tag2, err := imageTag(image2)
+	if err != nil {
+		return false, err
+	}
+	return tag1 != tag2, nil
+}
