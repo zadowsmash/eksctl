@@ -1,16 +1,16 @@
 package v1alpha5
 
 import (
-	"errors"
 	"fmt"
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/ec2"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"math"
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/ec2"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // SetClusterConfigDefaults will set defaults for a given cluster
@@ -89,7 +89,11 @@ func SetNodeGroupDefaults(ng *NodeGroup, meta *ClusterMeta) {
 		ng.KubeletExtraConfig = &InlineDocument{}
 	}
 
-	SetKubeletExtraConfigDefaults(ng, meta)
+	err := SetKubeletExtraConfigDefaults(ng, meta)
+	if err != nil {
+		fmt.Printf("Encountered error when setting KubeletConfig defaults: %s\n", err.Error())
+		os.Exit(2)
+	}
 }
 
 // SetManagedNodeGroupDefaults sets default values for a ManagedNodeGroup
@@ -187,22 +191,20 @@ func setDefaultNodeLabels(labels map[string]string, clusterName, nodeGroupName s
 type getRscDefaultFunc func(string, *ClusterMeta) (string, error)
 type setRscDefaultFunc func(*NodeGroup, string, *ClusterMeta, getRscDefaultFunc) error
 
-type rscParamSet struct {
-	setFun  setRscDefaultFunc `json: "setFun,omitEmpty"`
-	getFun  getRscDefaultFunc `json: "getFun,omitEmpty"`
-	rscType string            `json: "rscType,omitEmpty"`
-}
-
-var rscParams = []rscParamSet{
-	{setFun: setCpuReservationsDefaults, getFun: getCpuReservations, rscType: "cpu"},
-	{setFun: setMemoryResevationDefaults, getFun: getMemReservations, rscType: "memory"},
-	{setFun: setEphemeralStorageDefaults, getFun: getEphemeralStorageReservations, rscType: "ephemeral-storage"},
+var rscParams = []struct {
+	setFn   setRscDefaultFunc
+	getFn   getRscDefaultFunc
+	rscType string
+}{
+	{setCPUReservationDefaults, getCPUReservations, "cpu"},
+	{setMemoryResevationDefaults, getMemReservations, "memory"},
+	{setEphemeralStorageDefaults, getEphemeralStorageReservations, "ephemeral-storage"},
 }
 
 // SetKubeletExtraConfigDefaults adds Kubelet CPU, Mem, and Storage Reservation default values for a nodegroup
 func SetKubeletExtraConfigDefaults(ng *NodeGroup, meta *ClusterMeta) error {
 	for _, pSet := range rscParams {
-		err := pSet.setFun(ng, pSet.rscType, meta, pSet.getFun)
+		err := pSet.setFn(ng, pSet.rscType, meta, pSet.getFn)
 		if err != nil {
 			return err
 		}
@@ -210,7 +212,7 @@ func SetKubeletExtraConfigDefaults(ng *NodeGroup, meta *ClusterMeta) error {
 	return nil
 }
 
-func setCpuReservationsDefaults(ng *NodeGroup, rscType string, meta *ClusterMeta, getFn getRscDefaultFunc) error {
+func setCPUReservationDefaults(ng *NodeGroup, rscType string, meta *ClusterMeta, getFn getRscDefaultFunc) error {
 	return setReservationDefault(ng, rscType, meta, getFn)
 }
 
@@ -249,13 +251,8 @@ func getKubeReserved(kec InlineDocument) map[string]interface{} {
 	return kubeReserved
 }
 
-type cpuEntry struct {
-	cores int64
-	res   string
-}
-
 // See: https://docs.microsoft.com/en-us/azure/aks/concepts-clusters-workloads
-var cpuAllocations map[int64]string = map[int64]string{
+var cpuAllocations = map[int64]string{
 	1:  "60m",
 	2:  "100m",  //+40
 	4:  "140m",  //+40
@@ -267,19 +264,15 @@ var cpuAllocations map[int64]string = map[int64]string{
 	96: "1040m", //+320
 }
 
-func getCpuReservations(it string, meta *ClusterMeta) (string, error) {
+func getCPUReservations(it string, meta *ClusterMeta) (string, error) {
 	cores, err := getInstanceTypeCores(it, meta)
 	if err != nil {
 		return "", err
 	}
 
-	reservedCores := "0"
-	ok := false
-	if reservedCores, ok = cpuAllocations[cores]; !ok {
-		err = fmt.Errorf("Could not find suggested core reservation for instance type: %s\n", it)
-	}
-	if err != nil {
-		return "", err
+	reservedCores, ok := cpuAllocations[cores]
+	if !ok {
+		return "", fmt.Errorf("could not find suggested core reservation for instance type: %s", it)
 	}
 	return reservedCores, nil
 }
@@ -289,8 +282,8 @@ func getInstanceTypeCores(it string, meta *ClusterMeta) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	vCpuInfo := (*instTypeInfos).VCpuInfo
-	cpuCores := *vCpuInfo.DefaultVCpus
+	vCPUInfo := (*instTypeInfos).VCpuInfo
+	cpuCores := *vCPUInfo.DefaultVCpus
 	return cpuCores, nil
 }
 
@@ -392,13 +385,19 @@ func getInstanceTypeInfo(it string, meta *ClusterMeta) (*ec2.InstanceTypeInfo, e
 	}
 	instTypeInfos := descInstTypeOutput.InstanceTypes
 	if len(instTypeInfos) == 0 {
-		return nil, errors.New("No info found for instance type: " + it)
+		return nil, fmt.Errorf("unable to get attributes for instance type: %s", it)
 	}
 	return instTypeInfos[0], nil
 }
 
 func getInstanceTypeOutput(it string, meta *ClusterMeta) (*ec2.DescribeInstanceTypesOutput, error) {
-	sess, err := getSession(meta)
+	region := meta.Region
+	if region == "" {
+		region = DefaultRegion
+	}
+	sess, err := session.NewSession(&aws.Config{
+		Region: aws.String(region),
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -410,34 +409,6 @@ func getInstanceTypeOutput(it string, meta *ClusterMeta) (*ec2.DescribeInstanceT
 		return nil, err
 	}
 	return descInstanceTypesOutput, nil
-}
-
-func getRegion(meta *ClusterMeta) string {
-	region := ""
-	region = (*meta).Region
-	if region == "" {
-		region = os.Getenv("REGION")
-	}
-	return region
-}
-
-func getSession(meta *ClusterMeta) (*session.Session, error) {
-	region := getRegion(meta)
-	var sess *session.Session = nil
-	if region != "" {
-		sess = session.Must(session.NewSession(
-			&aws.Config{
-				Region: aws.String(region),
-			},
-		))
-	} else {
-		sess = session.Must(session.NewSession())
-	}
-	if sess == nil {
-		// returns session, error
-		return session.NewSession()
-	}
-	return sess, nil
 }
 
 // DefaultClusterNAT will set the default value for Cluster NAT mode

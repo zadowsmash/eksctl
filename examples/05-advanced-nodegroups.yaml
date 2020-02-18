@@ -1,11 +1,11 @@
 # An advanced example of ClusterConfig object with customised nodegroups:
---- 
+---
 apiVersion: eksctl.io/v1alpha5
 kind: ClusterConfig
 
 metadata:
   name: cluster-5
-  region: eu-west-2
+  region: eu-west-1
 
 nodeGroups:
   - name: ng1-public
@@ -29,7 +29,7 @@ nodeGroups:
       nodegroup-type: backend-cluster-addons
     privateNetworking: true
     preBootstrapCommands:
-      # allow docker registries to be deployed as cluster service 
+      # allow docker registries to be deployed as cluster service
       - 'echo {\"insecure-registries\": [\"172.20.0.0/16\",\"10.100.0.0/16\"]} > /etc/docker/daemon.json'
       - "systemctl restart docker"
 

@@ -236,7 +236,6 @@ var _ = Describe("cmdutils configfile", func() {
 					ClusterConfig:     api.NewClusterConfig(),
 					ProviderConfig:    &api.ProviderConfig{},
 				}
-
 				ngFilter := NewNodeGroupFilter()
 
 				params := &CreateClusterCmdParams{
