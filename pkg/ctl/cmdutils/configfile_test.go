@@ -3,15 +3,27 @@ package cmdutils_test
 import (
 	"path/filepath"
 
+	"github.com/aws/aws-sdk-go/service/ec2"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
+	. "github.com/stretchr/testify/mock"
 	"github.com/spf13/cobra"
 
 	api "github.com/weaveworks/eksctl/pkg/apis/eksctl.io/v1alpha5"
 	. "github.com/weaveworks/eksctl/pkg/ctl/cmdutils"
+	"github.com/weaveworks/eksctl/pkg/testutils/mockprovider"
+
+)
+
+var (
+	p *mockprovider.MockProvider
 )
 
 var _ = Describe("cmdutils configfile", func() {
+
+	BeforeEach(func() {
+		p = mockprovider.NewMockProvider()
+	})
 
 	newCmd := func() *cobra.Command {
 		return &cobra.Command{
@@ -207,6 +219,26 @@ var _ = Describe("cmdutils configfile", func() {
 		})
 
 		It("loader should handle nodegroup exclusion with config file", func() {
+			int64Ptr := func(i int) *int64 {i64 := int64(i); return &i64}
+			mockResultFn := func(_ *ec2.DescribeInstanceTypesInput) (*ec2.DescribeInstanceTypesOutput, error) {
+				t := true
+				return &ec2.DescribeInstanceTypesOutput{
+					InstanceTypes: []*ec2.InstanceTypeInfo{
+						&ec2.InstanceTypeInfo{
+							VCpuInfo: &ec2.VCpuInfo{DefaultVCpus: int64Ptr(32)},
+							MemoryInfo:  &ec2.MemoryInfo{SizeInMiB: int64Ptr(61440)},
+							InstanceStorageSupported: &t,
+							InstanceStorageInfo: &ec2.InstanceStorageInfo{TotalSizeInGB: int64Ptr(640)},
+						},
+					},
+				}, nil
+			}
+
+			p.MockEC2().On("DescribeInstanceTypes",
+				MatchedBy(func(input *ec2.DescribeInstanceTypesInput) bool {
+					return input != nil
+				})).Return(mockResultFn)
+
 			loaderParams := []struct {
 				configFile       string
 				nodeGroupCount   int
